@@ -24,7 +24,11 @@ import {
   Settings,
   Grid,
   Save,
-  CheckCircle2
+  CheckCircle2,
+  Calendar,
+  Tag,
+  FileText,
+  ChevronDown
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -33,7 +37,7 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isAfter, isBefore, startOfDay, endOfDay, eachMonthOfInterval, subMonths } from 'date-fns';
 import html2canvas from 'html2canvas';
 import { Transaction, CategoryDefinition, TransactionType, SavingsGoal } from './types';
 
@@ -123,6 +127,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'settings'>('dashboard');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [viewingTransaction, setViewingTransaction] = useState<Transaction | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -151,6 +157,7 @@ const App: React.FC = () => {
   const [isFilterVisible, setIsFilterVisible] = useState(false);
   const [filterType, setFilterType] = useState<'all' | TransactionType>('all');
   const [filterCategory, setFilterCategory] = useState<string | 'all'>('all');
+  const [filterMonth, setFilterMonth] = useState<string>('all');
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -176,6 +183,14 @@ const App: React.FC = () => {
 
   const getCategoryById = (id: string) => categories.find(c => c.id === id) || categories.find(c => c.id === 'cat-other')!;
 
+  const availableMonths = useMemo(() => {
+    const dates = transactions.map(t => parseISO(t.date));
+    if (dates.length === 0) return [new Date()];
+    const minDate = dates.reduce((a, b) => a < b ? a : b);
+    const maxDate = new Date();
+    return eachMonthOfInterval({ start: startOfMonth(minDate), end: endOfMonth(maxDate) }).reverse();
+  }, [transactions]);
+
   const stats = useMemo(() => {
     const now = new Date();
     const monthStart = startOfMonth(now);
@@ -196,11 +211,21 @@ const App: React.FC = () => {
                            getCategoryById(t.category).name.toLowerCase().includes(searchQuery.toLowerCase());
       let matchesDate = true;
       const tDate = parseISO(t.date);
+      
+      // Conjunction logic for month and date range
+      if (filterMonth !== 'all') {
+        const monthDate = parseISO(filterMonth);
+        const start = startOfMonth(monthDate);
+        const end = endOfMonth(monthDate);
+        matchesDate = matchesDate && isWithinInterval(tDate, { start, end });
+      }
+      
       if (filterStartDate) matchesDate = matchesDate && (isAfter(tDate, startOfDay(parseISO(filterStartDate))) || tDate.getTime() === startOfDay(parseISO(filterStartDate)).getTime());
       if (filterEndDate) matchesDate = matchesDate && (isBefore(tDate, endOfDay(parseISO(filterEndDate))) || tDate.getTime() === endOfDay(parseISO(filterEndDate)).getTime());
+      
       return matchesType && matchesCategory && matchesSearch && matchesDate;
     });
-  }, [transactions, filterType, filterCategory, searchQuery, filterStartDate, filterEndDate, categories]);
+  }, [transactions, filterType, filterCategory, filterMonth, searchQuery, filterStartDate, filterEndDate, categories]);
 
   const handleOpenAdd = () => {
     setEditingId(null); setAmount(''); setDescription(''); setType('expense'); setTransactionCategory('cat-food'); setReceiptImage(undefined); setIsModalOpen(true);
@@ -208,6 +233,11 @@ const App: React.FC = () => {
 
   const handleOpenEdit = (transaction: Transaction) => {
     setEditingId(transaction.id); setAmount(transaction.amount.toString()); setDescription(transaction.description); setType(transaction.type); setTransactionCategory(transaction.category); setReceiptImage(transaction.receiptImage); setIsModalOpen(true);
+  };
+
+  const handleOpenDetail = (transaction: Transaction) => {
+    setViewingTransaction(transaction);
+    setIsDetailModalOpen(true);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -341,31 +371,107 @@ const App: React.FC = () => {
             </div>
             {isFilterVisible && (
               <div className={`p-4 rounded-2xl border mb-4 space-y-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
-                <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" /><input type="text" placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className={`w-full pl-10 pr-4 py-2 rounded-xl text-sm border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} /></div>
-                <div className="flex gap-2">{(['all', 'income', 'expense'] as const).map(t => (<button key={t} onClick={() => setFilterType(t)} className={`px-3 py-1.5 rounded-full text-xs capitalize ${filterType === t ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-slate-800'}`}>{t}</button>))}</div>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input 
+                    type="text" 
+                    placeholder="Search descriptions..." 
+                    value={searchQuery} 
+                    onChange={(e) => setSearchQuery(e.target.value)} 
+                    className={`w-full pl-10 pr-4 py-2 rounded-xl text-sm border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} 
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Month</label>
+                      <div className="relative">
+                        <select 
+                          value={filterMonth} 
+                          onChange={(e) => setFilterMonth(e.target.value)}
+                          className={`w-full pl-3 pr-8 py-2 rounded-xl text-xs border appearance-none ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                        >
+                          <option value="all">All Months</option>
+                          {availableMonths.map(m => (
+                            <option key={m.toISOString()} value={m.toISOString()}>
+                              {format(m, 'MMMM yyyy')}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+                      </div>
+                   </div>
+
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Type</label>
+                      <div className="flex gap-1">
+                        {(['all', 'income', 'expense'] as const).map(t => (
+                          <button 
+                            key={t} 
+                            onClick={() => setFilterType(t)} 
+                            className={`flex-1 py-2 rounded-xl text-[10px] font-bold capitalize transition-all ${filterType === t ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800'}`}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Start Date</label>
+                      <input 
+                        type="date" 
+                        value={filterStartDate} 
+                        onChange={(e) => setFilterStartDate(e.target.value)}
+                        className={`w-full px-3 py-2 rounded-xl text-xs border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                      />
+                   </div>
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">End Date</label>
+                      <input 
+                        type="date" 
+                        value={filterEndDate} 
+                        onChange={(e) => setFilterEndDate(e.target.value)}
+                        className={`w-full px-3 py-2 rounded-xl text-xs border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                      />
+                   </div>
+                </div>
               </div>
             )}
-            {filteredTransactions.map(t => {
-              const cat = getCategoryById(t.category);
-              return (
-                <div key={t.id} onClick={() => handleOpenEdit(t)} className={`p-4 rounded-2xl flex items-center justify-between ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${t.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>{getIcon(cat.iconName)}</div>
-                    <div>
-                      <p className="font-semibold text-sm">{t.description}</p>
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs text-gray-500">{cat.name} • {format(parseISO(t.date), 'MMM dd')}</p>
-                        {t.receiptImage && <ImageIcon className="w-3 h-3 text-indigo-400" />}
+            
+            <div className="space-y-3">
+              {filteredTransactions.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="w-16 h-16 bg-gray-100 dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Search className="w-8 h-8 text-gray-300" />
+                  </div>
+                  <p className="text-sm text-gray-400 font-medium">No transactions found matching your filters.</p>
+                </div>
+              ) : (
+                filteredTransactions.map(t => {
+                  const cat = getCategoryById(t.category);
+                  return (
+                    <div key={t.id} onClick={() => handleOpenDetail(t)} className={`p-4 rounded-2xl flex items-center justify-between cursor-pointer active:scale-[0.98] transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${t.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>{getIcon(cat.iconName)}</div>
+                        <div>
+                          <p className="font-semibold text-sm">{t.description}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs text-gray-500">{cat.name} • {format(parseISO(t.date), 'MMM dd')}</p>
+                            {t.receiptImage && <ImageIcon className="w-3 h-3 text-indigo-400" />}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className={`font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>₹{t.amount.toFixed(2)}</span>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>₹{t.amount.toFixed(2)}</span>
-                    <button onClick={(e) => { e.stopPropagation(); setTransactionToDelete(t.id); }} className="p-2 text-gray-300 hover:text-rose-500"><Trash2 className="w-4.5 h-4.5" /></button>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })
+              )}
+            </div>
           </div>
         )}
 
@@ -396,6 +502,92 @@ const App: React.FC = () => {
         <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'history' ? 'text-indigo-600' : 'text-gray-400'}`}><History className="w-6 h-6" /><span className="text-[10px] font-medium">History</span></button>
         <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'settings' ? 'text-indigo-600' : 'text-gray-400'}`}><Settings className="w-6 h-6" /><span className="text-[10px] font-medium">Settings</span></button>
       </nav>
+
+      {/* Transaction Detail Modal */}
+      {isDetailModalOpen && viewingTransaction && (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto">
+          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all scale-in ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`}>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Transaction Details</h2>
+              <button onClick={() => setIsDetailModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="text-center py-6">
+                <span className={`text-4xl font-black ${viewingTransaction.type === 'income' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  {viewingTransaction.type === 'income' ? '+' : '-'}₹{viewingTransaction.amount.toFixed(2)}
+                </span>
+                <p className={`text-sm font-bold uppercase tracking-widest mt-2 ${viewingTransaction.type === 'income' ? 'text-emerald-500/60' : 'text-rose-500/60'}`}>
+                  {viewingTransaction.type}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4">
+                <div className={`p-4 rounded-2xl flex items-center gap-4 ${isDarkMode ? 'bg-slate-800/50' : 'bg-gray-50'}`}>
+                  <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-600">
+                    <Tag className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Category</p>
+                    <p className="font-semibold flex items-center gap-2">
+                      {getIcon(getCategoryById(viewingTransaction.category).iconName)}
+                      {getCategoryById(viewingTransaction.category).name}
+                    </p>
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-2xl flex items-center gap-4 ${isDarkMode ? 'bg-slate-800/50' : 'bg-gray-50'}`}>
+                  <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-600">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Date & Time</p>
+                    <p className="font-semibold">{format(parseISO(viewingTransaction.date), 'MMMM dd, yyyy • hh:mm a')}</p>
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-2xl flex items-center gap-4 ${isDarkMode ? 'bg-slate-800/50' : 'bg-gray-50'}`}>
+                  <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-600">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Description</p>
+                    <p className="font-semibold">{viewingTransaction.description}</p>
+                  </div>
+                </div>
+
+                {viewingTransaction.receiptImage && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wider ml-2">Receipt Attachment</p>
+                    <img src={viewingTransaction.receiptImage} alt="Receipt" className="w-full h-48 object-cover rounded-2xl shadow-sm border border-indigo-100 dark:border-slate-800" />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button 
+                  onClick={() => {
+                    handleOpenEdit(viewingTransaction);
+                    setIsDetailModalOpen(false);
+                  }}
+                  className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 active:scale-[0.98] transition-all"
+                >
+                  <Edit2 className="w-5 h-5" /> Edit
+                </button>
+                <button 
+                  onClick={() => {
+                    setTransactionToDelete(viewingTransaction.id);
+                    setIsDetailModalOpen(false);
+                  }}
+                  className="flex-1 py-4 bg-gray-100 dark:bg-slate-800 text-rose-500 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                >
+                  <Trash2 className="w-5 h-5" /> Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Transaction Modal */}
       {isModalOpen && (
