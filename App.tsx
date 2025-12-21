@@ -339,6 +339,10 @@ const App: React.FC = () => {
     if (!amount || parseFloat(amount) <= 0) return;
 
     if (editingId) {
+      // Added confirmation prompt before saving edits
+      const isConfirmed = window.confirm("Are you sure you want to save the changes to this transaction?");
+      if (!isConfirmed) return;
+
       setTransactions(prev => prev.map(t => 
         t.id === editingId 
           ? { ...t, amount: parseFloat(amount), type, category: transactionCategory, description: description || 'No description', receiptImage } 
@@ -595,7 +599,13 @@ const App: React.FC = () => {
                     <button key={t} onClick={() => setFilterType(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize transition-all ${filterType === t ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800 text-gray-500 hover:bg-gray-200 dark:hover:bg-slate-700'}`}>{t}</button>
                   ))}
                 </div>
-                <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className={`w-full p-2 rounded-lg text-xs border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'}`}>
+                {/* Updated Select Styling for consistency */}
+                <select 
+                  value={filterCategory} 
+                  onChange={(e) => setFilterCategory(e.target.value)} 
+                  className={`w-full py-2.5 px-4 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none bg-no-repeat bg-[right_1rem_center] bg-[length:1em_1em] ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-gray-50 border-gray-200 text-slate-900'}`}
+                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")` }}
+                >
                   <option value="all">All Categories</option>
                   {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
                 </select>

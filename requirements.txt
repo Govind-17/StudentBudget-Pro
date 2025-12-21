@@ -1,0 +1,7 @@
+react
+react-dom
+lucide-react
+@google/genai
+recharts
+date-fns
+html2canvas
