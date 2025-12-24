@@ -28,7 +28,8 @@ import {
   Calendar,
   Tag,
   FileText,
-  ChevronDown
+  ChevronDown,
+  Share
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -163,6 +164,7 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
 
   const reportRef = useRef<HTMLDivElement>(null);
+  const historyReportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { localStorage.setItem('transactions', JSON.stringify(transactions)); }, [transactions]);
@@ -227,6 +229,12 @@ const App: React.FC = () => {
     });
   }, [transactions, filterType, filterCategory, filterMonth, searchQuery, filterStartDate, filterEndDate, categories]);
 
+  const filteredStats = useMemo(() => {
+    const income = filteredTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+    const expense = filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+    return { income, expense, balance: income - expense };
+  }, [filteredTransactions]);
+
   const handleOpenAdd = () => {
     setEditingId(null); setAmount(''); setDescription(''); setType('expense'); setTransactionCategory('cat-food'); setReceiptImage(undefined); setIsModalOpen(true);
   };
@@ -282,12 +290,27 @@ const App: React.FC = () => {
     } catch (err) { console.error(err); } finally { setIsSharing(false); }
   };
 
+  const handleShareHistory = async () => {
+    if (!historyReportRef.current) return;
+    setIsSharing(true);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    try {
+      const canvas = await html2canvas(historyReportRef.current, { backgroundColor: isDarkMode ? '#020617' : '#f9fafb', scale: 2 });
+      const image = canvas.toDataURL("image/png");
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = `Transaction_History_${format(new Date(), 'MMM_dd_yyyy')}.png`;
+      link.click();
+    } catch (err) { console.error(err); } finally { setIsSharing(false); }
+  };
+
   return (
     <div className={`min-h-screen pb-24 relative ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-gray-50 text-slate-900'}`}>
       <SnowflakeAnimation />
 
-      {/* Hidden Report Template */}
+      {/* Hidden Report Templates */}
       <div className="absolute left-[-9999px] top-[-9999px]">
+        {/* Dashboard Report */}
         <div ref={reportRef} className={`w-[400px] p-8 space-y-6 ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-white text-slate-900'}`}>
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold tracking-tight">StudentBudget Pro</h1>
@@ -298,12 +321,76 @@ const App: React.FC = () => {
              <p className="text-xs opacity-70 mt-1">Net Balance</p>
           </div>
         </div>
+
+        {/* History Report */}
+        <div ref={historyReportRef} className={`w-[500px] p-10 space-y-8 ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-white text-slate-900'}`}>
+          <div className="flex items-center justify-between border-b pb-6 border-gray-100 dark:border-slate-800">
+            <div>
+              <h1 className="text-2xl font-black text-indigo-600">StudentBudget Pro</h1>
+              <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Transaction History</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-bold text-gray-400 uppercase">{format(new Date(), 'MMMM dd, yyyy')}</p>
+              {filterMonth !== 'all' && (
+                <p className="text-xs font-black text-indigo-500">{format(parseISO(filterMonth), 'MMMM yyyy')}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20">
+              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Income</p>
+              <p className="text-lg font-black text-emerald-600">₹{filteredStats.income.toFixed(0)}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-500/10 border border-rose-100 dark:border-rose-500/20">
+              <p className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Expense</p>
+              <p className="text-lg font-black text-rose-600">₹{filteredStats.expense.toFixed(0)}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20">
+              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Net</p>
+              <p className="text-lg font-black text-indigo-600">₹{filteredStats.balance.toFixed(0)}</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {filteredTransactions.slice(0, 15).map(t => {
+              const cat = getCategoryById(t.category);
+              return (
+                <div key={t.id} className="flex items-center justify-between py-3 border-b border-gray-50 dark:border-slate-800">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${t.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                      {getIcon(cat.iconName)}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold">{t.description}</p>
+                      <p className="text-[10px] text-gray-400">{cat.name} • {format(parseISO(t.date), 'MMM dd')}</p>
+                    </div>
+                  </div>
+                  <p className={`text-sm font-black ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {t.type === 'income' ? '+' : '-'}₹{t.amount.toFixed(2)}
+                  </p>
+                </div>
+              );
+            })}
+            {filteredTransactions.length > 15 && (
+              <p className="text-center text-[10px] text-gray-400 italic pt-2">+ {filteredTransactions.length - 15} more transactions</p>
+            )}
+          </div>
+
+          <div className="pt-6 border-t border-gray-100 dark:border-slate-800 text-center">
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em]">Generated via StudentBudget Pro</p>
+          </div>
+        </div>
       </div>
 
       <header className={`sticky top-0 z-30 px-6 py-4 flex items-center justify-between border-b ${isDarkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-white/80 border-gray-200'} backdrop-blur-md`}>
         <div className="flex items-center gap-2"><div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center"><Wallet className="w-5 h-5 text-white" /></div><h1 className="text-xl font-bold">BudgetPro</h1></div>
         <div className="flex items-center gap-2">
-          <button onClick={handleShareReport} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-indigo-600"><Share2 className="w-5 h-5" /></button>
+          {activeTab === 'dashboard' ? (
+            <button onClick={handleShareReport} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-indigo-600 transition-transform active:scale-90"><Share2 className="w-5 h-5" /></button>
+          ) : activeTab === 'history' ? (
+            <button onClick={handleShareHistory} className="p-2 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-transform active:scale-90"><Share className="w-5 h-5" /></button>
+          ) : null}
           <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-slate-600">{isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
         </div>
       </header>
@@ -365,12 +452,17 @@ const App: React.FC = () => {
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xl font-bold">History</h2>
-              <button onClick={() => setIsFilterVisible(!isFilterVisible)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${isFilterVisible ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-slate-800 text-gray-600'}`}>
-                <Filter className="w-3.5 h-3.5" /> Filters
-              </button>
+              <div className="flex gap-2">
+                <button onClick={handleShareHistory} className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-colors active:scale-95">
+                  <Share className="w-3.5 h-3.5" /> Share
+                </button>
+                <button onClick={() => setIsFilterVisible(!isFilterVisible)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors active:scale-95 ${isFilterVisible ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800 text-gray-600'}`}>
+                  <Filter className="w-3.5 h-3.5" /> Filters
+                </button>
+              </div>
             </div>
             {isFilterVisible && (
-              <div className={`p-4 rounded-2xl border mb-4 space-y-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
+              <div className={`p-4 rounded-2xl border mb-4 space-y-4 scale-in ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input 
@@ -378,7 +470,7 @@ const App: React.FC = () => {
                     placeholder="Search descriptions..." 
                     value={searchQuery} 
                     onChange={(e) => setSearchQuery(e.target.value)} 
-                    className={`w-full pl-10 pr-4 py-2 rounded-xl text-sm border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} 
+                    className={`w-full pl-10 pr-4 py-2 rounded-xl text-sm border focus:ring-2 focus:ring-indigo-500 outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`} 
                   />
                 </div>
                 
@@ -389,7 +481,7 @@ const App: React.FC = () => {
                         <select 
                           value={filterMonth} 
                           onChange={(e) => setFilterMonth(e.target.value)}
-                          className={`w-full pl-3 pr-8 py-2 rounded-xl text-xs border appearance-none ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                          className={`w-full pl-3 pr-8 py-2 rounded-xl text-xs border appearance-none outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
                         >
                           <option value="all">All Months</option>
                           {availableMonths.map(m => (
@@ -425,7 +517,7 @@ const App: React.FC = () => {
                         type="date" 
                         value={filterStartDate} 
                         onChange={(e) => setFilterStartDate(e.target.value)}
-                        className={`w-full px-3 py-2 rounded-xl text-xs border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                        className={`w-full px-3 py-2 rounded-xl text-xs border outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
                       />
                    </div>
                    <div className="space-y-1">
@@ -434,7 +526,7 @@ const App: React.FC = () => {
                         type="date" 
                         value={filterEndDate} 
                         onChange={(e) => setFilterEndDate(e.target.value)}
-                        className={`w-full px-3 py-2 rounded-xl text-xs border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}
+                        className={`w-full px-3 py-2 rounded-xl text-xs border outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
                       />
                    </div>
                 </div>
@@ -453,7 +545,7 @@ const App: React.FC = () => {
                 filteredTransactions.map(t => {
                   const cat = getCategoryById(t.category);
                   return (
-                    <div key={t.id} onClick={() => handleOpenDetail(t)} className={`p-4 rounded-2xl flex items-center justify-between cursor-pointer active:scale-[0.98] transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
+                    <div key={t.id} onClick={() => handleOpenDetail(t)} className={`p-4 rounded-2xl flex items-center justify-between cursor-pointer active:scale-[0.98] transition-all hover:translate-x-1 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${t.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>{getIcon(cat.iconName)}</div>
                         <div>
@@ -478,12 +570,12 @@ const App: React.FC = () => {
         {activeTab === 'settings' && (
           <div className="space-y-6">
             <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
-              <div className="flex items-center justify-between mb-4"><h3 className="font-bold flex items-center gap-2"><Grid className="w-5 h-5 text-indigo-500" /> Categories</h3><button onClick={() => setIsCategoryModalOpen(true)} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600"><Plus className="w-4 h-4" /></button></div>
+              <div className="flex items-center justify-between mb-4"><h3 className="font-bold flex items-center gap-2"><Grid className="w-5 h-5 text-indigo-500" /> Categories</h3><button onClick={() => setIsCategoryModalOpen(true)} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600 transition-transform active:scale-90"><Plus className="w-4 h-4" /></button></div>
               <div className="space-y-2">
                 {categories.filter(c => c.id !== 'cat-income').map(cat => (
                   <div key={cat.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 dark:border-slate-800">
                     <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-slate-800 flex items-center justify-center text-indigo-600">{getIcon(cat.iconName)}</div><span className="text-sm font-medium">{cat.name}</span></div>
-                    {!cat.isSystem && (<button onClick={() => setCategoryToDelete(cat.id)} className="p-2 text-gray-400 hover:text-rose-600"><Trash2 className="w-3.5 h-3.5" /></button>)}
+                    {!cat.isSystem && (<button onClick={() => setCategoryToDelete(cat.id)} className="p-2 text-gray-400 hover:text-rose-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>)}
                   </div>
                 ))}
               </div>
@@ -491,16 +583,24 @@ const App: React.FC = () => {
             
             <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
               <h3 className="font-semibold mb-2">Monthly Budget Limit</h3>
-              <div className="relative"><input type="number" value={monthlyBudget} onChange={(e) => setMonthlyBudget(Number(e.target.value))} className={`w-full p-4 pl-8 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} /><span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-gray-400">₹</span></div>
+              <div className="relative"><input type="number" value={monthlyBudget} onChange={(e) => setMonthlyBudget(Number(e.target.value))} className={`w-full p-4 pl-8 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} /><span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-gray-400">₹</span></div>
             </div>
           </div>
         )}
       </main>
 
+      {/* Loading Overlay for Sharing */}
+      {isSharing && (
+        <div className="fixed inset-0 z-[200] bg-black/50 backdrop-blur-md flex flex-col items-center justify-center text-white">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="font-bold tracking-widest text-sm uppercase">Generating Report...</p>
+        </div>
+      )}
+
       <nav className={`fixed bottom-0 left-0 right-0 z-50 px-6 py-3 border-t backdrop-blur-lg flex justify-between items-center ${isDarkMode ? 'bg-slate-950/80 border-slate-800' : 'bg-white/80 border-gray-200'}`}>
-        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'dashboard' ? 'text-indigo-600' : 'text-gray-400'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[10px] font-medium">Home</span></button>
-        <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'history' ? 'text-indigo-600' : 'text-gray-400'}`}><History className="w-6 h-6" /><span className="text-[10px] font-medium">History</span></button>
-        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'settings' ? 'text-indigo-600' : 'text-gray-400'}`}><Settings className="w-6 h-6" /><span className="text-[10px] font-medium">Settings</span></button>
+        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'dashboard' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[10px] font-bold">Home</span></button>
+        <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'history' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><History className="w-6 h-6" /><span className="text-[10px] font-bold">History</span></button>
+        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'settings' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><Settings className="w-6 h-6" /><span className="text-[10px] font-bold">Settings</span></button>
       </nav>
 
       {/* Transaction Detail Modal */}
@@ -529,7 +629,7 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Category</p>
-                    <p className="font-semibold flex items-center gap-2">
+                    <p className="font-semibold flex items-center gap-2 text-sm">
                       {getIcon(getCategoryById(viewingTransaction.category).iconName)}
                       {getCategoryById(viewingTransaction.category).name}
                     </p>
@@ -542,7 +642,7 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Date & Time</p>
-                    <p className="font-semibold">{format(parseISO(viewingTransaction.date), 'MMMM dd, yyyy • hh:mm a')}</p>
+                    <p className="font-semibold text-sm">{format(parseISO(viewingTransaction.date), 'MMMM dd, yyyy • hh:mm a')}</p>
                   </div>
                 </div>
 
@@ -552,7 +652,7 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Description</p>
-                    <p className="font-semibold">{viewingTransaction.description}</p>
+                    <p className="font-semibold text-sm">{viewingTransaction.description}</p>
                   </div>
                 </div>
 
