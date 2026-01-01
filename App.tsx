@@ -29,16 +29,22 @@ import {
   Tag,
   FileText,
   ChevronDown,
-  Share
+  Share,
+  XCircle
 } from 'lucide-react';
 import { 
   PieChart, 
   Pie, 
   Cell,
   Tooltip,
-  ResponsiveContainer
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid
 } from 'recharts';
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isAfter, isBefore, startOfDay, endOfDay, eachMonthOfInterval, subMonths } from 'date-fns';
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isAfter, isBefore, startOfDay, endOfDay, eachMonthOfInterval, subMonths, addMonths, isValid } from 'date-fns';
 import html2canvas from 'html2canvas';
 import { Transaction, CategoryDefinition, TransactionType, SavingsGoal } from './types';
 
@@ -99,6 +105,8 @@ const DEFAULT_CATEGORIES: CategoryDefinition[] = [
 ];
 
 const GOAL_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'];
+const PIE_CHART_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088fe', '#00c49f', '#ffbb28', '#a4de6c'];
+
 
 const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
@@ -186,11 +194,19 @@ const App: React.FC = () => {
   const getCategoryById = (id: string) => categories.find(c => c.id === id) || categories.find(c => c.id === 'cat-other')!;
 
   const availableMonths = useMemo(() => {
-    const dates = transactions.map(t => parseISO(t.date));
-    if (dates.length === 0) return [new Date()];
-    const minDate = dates.reduce((a, b) => a < b ? a : b);
-    const maxDate = new Date();
-    return eachMonthOfInterval({ start: startOfMonth(minDate), end: endOfMonth(maxDate) }).reverse();
+    const transactionDates = transactions.map(t => parseISO(t.date)).filter(d => isValid(d));
+    
+    let earliestDate: Date;
+    if (transactionDates.length === 0) {
+      earliestDate = new Date(); // Fallback to current date if no valid transaction dates
+    } else {
+      earliestDate = transactionDates.reduce((a, b) => (a.getTime() < b.getTime() ? a : b));
+    }
+
+    const minDateForInterval = startOfMonth(earliestDate);
+    const maxDateForInterval = endOfMonth(new Date()); // Always use current month end as max
+
+    return eachMonthOfInterval({ start: minDateForInterval, end: maxDateForInterval }).reverse();
   }, [transactions]);
 
   const stats = useMemo(() => {
@@ -205,6 +221,57 @@ const App: React.FC = () => {
     return { totalIncome, totalExpense, balance: totalIncome - totalExpense, remainingBudget: monthlyBudget - totalExpense, currentMonthTransactions };
   }, [transactions, monthlyBudget]);
 
+  const pieChartData = useMemo(() => {
+    const expenseByCategory: { [key: string]: number } = {};
+    stats.currentMonthTransactions.filter(t => t.type === 'expense').forEach(t => {
+      expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + t.amount;
+    });
+    return Object.entries(expenseByCategory)
+      .map(([categoryId, amount], index) => ({
+        name: getCategoryById(categoryId).name,
+        value: amount,
+        color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
+      }))
+      .sort((a, b) => b.value - a.value); // Sort to show largest slices first
+  }, [stats.currentMonthTransactions, categories]);
+
+  const barChartData = useMemo(() => {
+    const monthlyExpenses: { [key: string]: number } = {};
+    const today = new Date();
+    const monthsArray: Date[] = [];
+
+    // Populate monthsArray with the last 6 months (including current)
+    for (let i = 0; i < 6; i++) {
+      monthsArray.push(subMonths(today, i));
+    }
+    // Sort oldest to newest for chart display
+    monthsArray.sort((a, b) => a.getTime() - b.getTime());
+
+    // Initialize monthlyExpenses for each of these months
+    monthsArray.forEach(monthDate => {
+      const monthKey = format(monthDate, 'yyyy-MM'); // Use a precise key
+      monthlyExpenses[monthKey] = 0;
+    });
+
+    // Aggregate expenses
+    transactions.forEach(t => {
+      const tDate = parseISO(t.date);
+      if (isValid(tDate)) {
+        const transactionMonthKey = format(tDate, 'yyyy-MM');
+        // Only aggregate if it falls within our 6-month window
+        if (monthlyExpenses.hasOwnProperty(transactionMonthKey) && t.type === 'expense') {
+          monthlyExpenses[transactionMonthKey] += t.amount;
+        }
+      }
+    });
+
+    // Map to chart data format
+    return monthsArray.map(monthDate => ({
+      month: format(monthDate, 'MMM'), // Short month name for display
+      expenses: monthlyExpenses[format(monthDate, 'yyyy-MM')],
+    }));
+  }, [transactions]);
+
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       const matchesType = filterType === 'all' || t.type === filterType;
@@ -217,13 +284,24 @@ const App: React.FC = () => {
       // Conjunction logic for month and date range
       if (filterMonth !== 'all') {
         const monthDate = parseISO(filterMonth);
-        const start = startOfMonth(monthDate);
-        const end = endOfMonth(monthDate);
-        matchesDate = matchesDate && isWithinInterval(tDate, { start, end });
+        if (isValid(monthDate)) { // Check if parsed month date is valid
+          const start = startOfMonth(monthDate);
+          const end = endOfMonth(monthDate);
+          matchesDate = matchesDate && isWithinInterval(tDate, { start, end });
+        } else {
+          matchesDate = false; // Invalid month filter means no match
+        }
       }
       
-      if (filterStartDate) matchesDate = matchesDate && (isAfter(tDate, startOfDay(parseISO(filterStartDate))) || tDate.getTime() === startOfDay(parseISO(filterStartDate)).getTime());
-      if (filterEndDate) matchesDate = matchesDate && (isBefore(tDate, endOfDay(parseISO(filterEndDate))) || tDate.getTime() === endOfDay(parseISO(filterEndDate)).getTime());
+      const parsedStartDate = filterStartDate ? parseISO(filterStartDate) : null;
+      const parsedEndDate = filterEndDate ? parseISO(filterEndDate) : null;
+
+      if (parsedStartDate && isValid(parsedStartDate)) { // Check if parsed start date is valid
+          matchesDate = matchesDate && (isAfter(tDate, startOfDay(parsedStartDate)) || tDate.getTime() === startOfDay(parsedStartDate).getTime());
+      }
+      if (parsedEndDate && isValid(parsedEndDate)) { // Check if parsed end date is valid
+          matchesDate = matchesDate && (isBefore(tDate, endOfDay(parsedEndDate)) || tDate.getTime() === endOfDay(parsedEndDate).getTime());
+      }
       
       return matchesType && matchesCategory && matchesSearch && matchesDate;
     });
@@ -234,6 +312,33 @@ const App: React.FC = () => {
     const expense = filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
     return { income, expense, balance: income - expense };
   }, [filteredTransactions]);
+
+  const filterSummary = useMemo(() => {
+    const activeFilters: string[] = [];
+    if (searchQuery) activeFilters.push(`"${searchQuery}"`);
+    if (filterType !== 'all') activeFilters.push(filterType);
+    if (filterMonth !== 'all') {
+      const parsedMonth = parseISO(filterMonth);
+      if (isValid(parsedMonth)) {
+        activeFilters.push(format(parsedMonth, 'MMM yyyy'));
+      }
+    }
+    if (filterCategory !== 'all') activeFilters.push(getCategoryById(filterCategory).name);
+    if (filterStartDate || filterEndDate) {
+      activeFilters.push(`Dates: ${filterStartDate || 'Any'} to ${filterEndDate || 'Any'}`);
+    }
+    return activeFilters.length > 0 ? `Showing: ${activeFilters.join(' • ')}` : '';
+  }, [searchQuery, filterType, filterMonth, filterCategory, filterStartDate, filterEndDate, categories]);
+
+  const handleClearFilters = () => {
+    setSearchQuery('');
+    setFilterType('all');
+    setFilterMonth('all');
+    setFilterCategory('all');
+    setFilterStartDate('');
+    setFilterEndDate('');
+    setIsFilterVisible(false); // Close filters after clearing
+  };
 
   const handleOpenAdd = () => {
     setEditingId(null); setAmount(''); setDescription(''); setType('expense'); setTransactionCategory('cat-food'); setReceiptImage(undefined); setIsModalOpen(true);
@@ -331,7 +436,7 @@ const App: React.FC = () => {
             </div>
             <div className="text-right">
               <p className="text-xs font-bold text-gray-400 uppercase">{format(new Date(), 'MMMM dd, yyyy')}</p>
-              {filterMonth !== 'all' && (
+              {filterMonth !== 'all' && isValid(parseISO(filterMonth)) && (
                 <p className="text-xs font-black text-indigo-500">{format(parseISO(filterMonth), 'MMMM yyyy')}</p>
               )}
             </div>
@@ -363,7 +468,7 @@ const App: React.FC = () => {
                     </div>
                     <div>
                       <p className="text-sm font-bold">{t.description}</p>
-                      <p className="text-[10px] text-gray-400">{cat.name} • {format(parseISO(t.date), 'MMM dd')}</p>
+                      <p className="text-[10px] text-gray-400">{format(parseISO(t.date), 'MMM dd')}</p>
                     </div>
                   </div>
                   <p className={`text-sm font-black ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
@@ -387,11 +492,11 @@ const App: React.FC = () => {
         <div className="flex items-center gap-2"><div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center"><Wallet className="w-5 h-5 text-white" /></div><h1 className="text-xl font-bold">BudgetPro</h1></div>
         <div className="flex items-center gap-2">
           {activeTab === 'dashboard' ? (
-            <button onClick={handleShareReport} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-indigo-600 transition-transform active:scale-90"><Share2 className="w-5 h-5" /></button>
+            <button onClick={handleShareReport} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-indigo-600 transition-transform active:scale-90" aria-label="Share Dashboard Report"><Share2 className="w-5 h-5" /></button>
           ) : activeTab === 'history' ? (
-            <button onClick={handleShareHistory} className="p-2 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-transform active:scale-90"><Share className="w-5 h-5" /></button>
+            <button onClick={handleShareHistory} className="p-2 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-transform active:scale-90" aria-label="Share Transaction History"><Share className="w-5 h-5" /></button>
           ) : null}
-          <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-slate-600">{isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
+          <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full bg-gray-100 dark:bg-slate-800 text-slate-600" aria-label={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>{isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
         </div>
       </header>
 
@@ -419,25 +524,81 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* Expense Breakdown Pie Chart */}
+            <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">Expense Breakdown (Current Month)</h3>
+              {pieChartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={pieChartData}
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={80}
+                      fill="#8884d8"
+                      dataKey="value"
+                      labelLine={false}
+                    >
+                      {pieChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value, name) => [`₹${value.toFixed(0)}`, name]} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center py-6 text-gray-400">No expenses this month for breakdown.</div>
+              )}
+            </div>
+
+            {/* Monthly Spending Bar Chart */}
+            <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">Last 6 Months Spending</h3>
+              {barChartData.some(d => d.expenses > 0) ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={barChartData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#334155' : '#e5e7eb'} />
+                    <XAxis dataKey="month" tick={{ fill: isDarkMode ? '#cbd5e1' : '#64748b', fontSize: 10 }} />
+                    <YAxis tickFormatter={(value) => `₹${value.toFixed(0)}`} tick={{ fill: isDarkMode ? '#cbd5e1' : '#64748b', fontSize: 10 }} />
+                    <Tooltip formatter={(value) => `₹${value.toFixed(0)}`} />
+                    <Bar dataKey="expenses" fill="#6366f1" />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center py-6 text-gray-400">No past spending to display.</div>
+              )}
+            </div>
+
+
             {/* Savings Goals */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold flex items-center gap-2"><PiggyBank className="w-5 h-5 text-indigo-500" /> Savings Goals</h3>
-                <button onClick={() => { setEditingGoalId(null); setGoalTitle(''); setGoalTarget(''); setGoalCurrent('0'); setIsGoalModalOpen(true); }} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600"><Plus className="w-4 h-4" /></button>
+                <button onClick={() => { setEditingGoalId(null); setGoalTitle(''); setGoalTarget(''); setGoalCurrent('0'); setIsGoalModalOpen(true); }} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600 transition-transform active:scale-90" aria-label="Add New Savings Goal"><Plus className="w-4 h-4" /></button>
               </div>
               {savingsGoals.length === 0 ? (
-                <div className="p-6 rounded-2xl border-2 border-dashed border-gray-200 dark:border-slate-800 text-center text-gray-400">No goals yet.</div>
+                <div className={`p-6 rounded-2xl border-2 border-dashed ${isDarkMode ? 'border-slate-800' : 'border-gray-200'} text-center text-gray-400`}>
+                  <PiggyBank className="w-8 h-8 mx-auto mb-2" />
+                  <p className="text-sm font-medium">No goals yet. Start saving!</p>
+                  <button onClick={() => { setEditingGoalId(null); setGoalTitle(''); setGoalTarget(''); setGoalCurrent('0'); setIsGoalModalOpen(true); }} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold active:scale-95 transition-all">Add Goal</button>
+                </div>
               ) : (
                 <div className="space-y-3">
-                  {savingsGoals.map(goal => (
+                  {savingsGoals.map(goal => {
+                    const progress = Math.min((goal.currentAmount / goal.targetAmount) * 100, 100);
+                    return (
                     <div key={goal.id} className={`p-4 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
                       <div className="flex justify-between items-start mb-2">
-                        <div><p className="font-bold text-sm">{goal.title}</p><p className="text-xs text-gray-500">₹{goal.currentAmount} of ₹{goal.targetAmount}</p></div>
-                        <button onClick={() => setGoalToDelete(goal.id)} className="p-1.5 rounded-lg text-rose-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <div><p className="font-bold text-sm">{goal.title}</p><p className="text-xs text-gray-500">₹{goal.currentAmount.toFixed(0)} of ₹{goal.targetAmount.toFixed(0)}</p></div>
+                        <button onClick={() => setGoalToDelete(goal.id)} className="p-1.5 rounded-lg text-rose-600" aria-label={`Delete ${goal.title}`}><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
-                      <div className="w-full h-2 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width: `${(goal.currentAmount / goal.targetAmount) * 100}%`, backgroundColor: goal.color }} /></div>
+                      <div className="w-full h-4 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden relative" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+                        <div className="h-full rounded-full transition-all flex items-center justify-end pr-2" style={{ width: `${progress}%`, backgroundColor: goal.color }}>
+                          <span className="text-[10px] font-bold text-white mix-blend-difference">{progress.toFixed(0)}%</span>
+                        </div>
+                      </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               )}
             </div>
@@ -453,10 +614,10 @@ const App: React.FC = () => {
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xl font-bold">History</h2>
               <div className="flex gap-2">
-                <button onClick={handleShareHistory} className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-colors active:scale-95">
+                <button onClick={handleShareHistory} className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 transition-colors active:scale-95" aria-label="Share Transaction History">
                   <Share className="w-3.5 h-3.5" /> Share
                 </button>
-                <button onClick={() => setIsFilterVisible(!isFilterVisible)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors active:scale-95 ${isFilterVisible ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800 text-gray-600'}`}>
+                <button onClick={() => setIsFilterVisible(!isFilterVisible)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors active:scale-95 ${isFilterVisible ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800 text-gray-600'}`} aria-expanded={isFilterVisible}>
                   <Filter className="w-3.5 h-3.5" /> Filters
                 </button>
               </div>
@@ -471,17 +632,20 @@ const App: React.FC = () => {
                     value={searchQuery} 
                     onChange={(e) => setSearchQuery(e.target.value)} 
                     className={`w-full pl-10 pr-4 py-2 rounded-xl text-sm border focus:ring-2 focus:ring-indigo-500 outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`} 
+                    aria-label="Search transactions"
                   />
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Month</label>
+                      <label htmlFor="filter-month" className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Month</label>
                       <div className="relative">
                         <select 
+                          id="filter-month"
                           value={filterMonth} 
                           onChange={(e) => setFilterMonth(e.target.value)}
                           className={`w-full pl-3 pr-8 py-2 rounded-xl text-xs border appearance-none outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
+                          aria-label="Filter by month"
                         >
                           <option value="all">All Months</option>
                           {availableMonths.map(m => (
@@ -502,6 +666,7 @@ const App: React.FC = () => {
                             key={t} 
                             onClick={() => setFilterType(t)} 
                             className={`flex-1 py-2 rounded-xl text-[10px] font-bold capitalize transition-all ${filterType === t ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 dark:bg-slate-800'}`}
+                            aria-pressed={filterType === t}
                           >
                             {t}
                           </button>
@@ -512,25 +677,39 @@ const App: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-3">
                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Start Date</label>
+                      <label htmlFor="filter-start-date" className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Start Date</label>
                       <input 
                         type="date" 
+                        id="filter-start-date"
                         value={filterStartDate} 
                         onChange={(e) => setFilterStartDate(e.target.value)}
                         className={`w-full px-3 py-2 rounded-xl text-xs border outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
+                        aria-label="Filter by start date"
                       />
                    </div>
                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">End Date</label>
+                      <label htmlFor="filter-end-date" className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">End Date</label>
                       <input 
                         type="date" 
+                        id="filter-end-date"
                         value={filterEndDate} 
                         onChange={(e) => setFilterEndDate(e.target.value)}
                         className={`w-full px-3 py-2 rounded-xl text-xs border outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50 border-gray-200'}`}
+                        aria-label="Filter by end date"
                       />
                    </div>
                 </div>
+
+                <button onClick={handleClearFilters} className="w-full py-2 bg-gray-100 dark:bg-slate-800 text-gray-600 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 active:scale-95 transition-all">
+                  <XCircle className="w-4 h-4" /> Clear Filters
+                </button>
               </div>
+            )}
+
+            {filterSummary && (
+              <p className={`text-xs text-gray-500 font-semibold mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                {filterSummary}
+              </p>
             )}
             
             <div className="space-y-3">
@@ -540,6 +719,7 @@ const App: React.FC = () => {
                     <Search className="w-8 h-8 text-gray-300" />
                   </div>
                   <p className="text-sm text-gray-400 font-medium">No transactions found matching your filters.</p>
+                  <button onClick={handleClearFilters} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold active:scale-95 transition-all">Clear Filters</button>
                 </div>
               ) : (
                 filteredTransactions.map(t => {
@@ -551,7 +731,7 @@ const App: React.FC = () => {
                         <div>
                           <p className="font-semibold text-sm">{t.description}</p>
                           <div className="flex items-center gap-1.5">
-                            <p className="text-xs text-gray-500">{cat.name} • {format(parseISO(t.date), 'MMM dd')}</p>
+                            <p className="text-xs text-gray-500">{format(parseISO(t.date), 'MMM dd')}</p>
                             {t.receiptImage && <ImageIcon className="w-3 h-3 text-indigo-400" />}
                           </div>
                         </div>
@@ -570,12 +750,12 @@ const App: React.FC = () => {
         {activeTab === 'settings' && (
           <div className="space-y-6">
             <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
-              <div className="flex items-center justify-between mb-4"><h3 className="font-bold flex items-center gap-2"><Grid className="w-5 h-5 text-indigo-500" /> Categories</h3><button onClick={() => setIsCategoryModalOpen(true)} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600 transition-transform active:scale-90"><Plus className="w-4 h-4" /></button></div>
+              <div className="flex items-center justify-between mb-4"><h3 className="font-bold flex items-center gap-2"><Grid className="w-5 h-5 text-indigo-500" /> Categories</h3><button onClick={() => setIsCategoryModalOpen(true)} className="p-1.5 rounded-full bg-indigo-100 text-indigo-600 transition-transform active:scale-90" aria-label="Add New Category"><Plus className="w-4 h-4" /></button></div>
               <div className="space-y-2">
                 {categories.filter(c => c.id !== 'cat-income').map(cat => (
                   <div key={cat.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 dark:border-slate-800">
                     <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-slate-800 flex items-center justify-center text-indigo-600">{getIcon(cat.iconName)}</div><span className="text-sm font-medium">{cat.name}</span></div>
-                    {!cat.isSystem && (<button onClick={() => setCategoryToDelete(cat.id)} className="p-2 text-gray-400 hover:text-rose-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>)}
+                    {!cat.isSystem && (<button onClick={() => setCategoryToDelete(cat.id)} className="p-2 text-gray-400 hover:text-rose-600 transition-colors" aria-label={`Delete ${cat.name}`}><Trash2 className="w-3.5 h-3.5" /></button>)}
                   </div>
                 ))}
               </div>
@@ -583,7 +763,7 @@ const App: React.FC = () => {
             
             <div className={`p-6 rounded-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
               <h3 className="font-semibold mb-2">Monthly Budget Limit</h3>
-              <div className="relative"><input type="number" value={monthlyBudget} onChange={(e) => setMonthlyBudget(Number(e.target.value))} className={`w-full p-4 pl-8 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} /><span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-gray-400">₹</span></div>
+              <div className="relative"><input type="number" value={monthlyBudget} onChange={(e) => setMonthlyBudget(Number(e.target.value))} className={`w-full p-4 pl-8 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} aria-label="Monthly budget limit" /><span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-gray-400">₹</span></div>
             </div>
           </div>
         )}
@@ -598,18 +778,18 @@ const App: React.FC = () => {
       )}
 
       <nav className={`fixed bottom-0 left-0 right-0 z-50 px-6 py-3 border-t backdrop-blur-lg flex justify-between items-center ${isDarkMode ? 'bg-slate-950/80 border-slate-800' : 'bg-white/80 border-gray-200'}`}>
-        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'dashboard' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><LayoutDashboard className="w-6 h-6" /><span className="text-[10px] font-bold">Home</span></button>
-        <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'history' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><History className="w-6 h-6" /><span className="text-[10px] font-bold">History</span></button>
-        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'settings' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`}><Settings className="w-6 h-6" /><span className="text-[10px] font-bold">Settings</span></button>
+        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'dashboard' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`} aria-label="Dashboard"><LayoutDashboard className="w-6 h-6" /><span className="text-[10px] font-bold">Home</span></button>
+        <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'history' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`} aria-label="Transaction History"><History className="w-6 h-6" /><span className="text-[10px] font-bold">History</span></button>
+        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'settings' ? 'text-indigo-600 scale-110' : 'text-gray-400 opacity-60'}`} aria-label="Settings"><Settings className="w-6 h-6" /><span className="text-[10px] font-bold">Settings</span></button>
       </nav>
 
       {/* Transaction Detail Modal */}
       {isDetailModalOpen && viewingTransaction && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto">
-          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all scale-in ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`}>
+          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all scale-in ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`} role="dialog" aria-modal="true" aria-labelledby="transaction-details-title">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold">Transaction Details</h2>
-              <button onClick={() => setIsDetailModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800"><X className="w-5 h-5" /></button>
+              <h2 id="transaction-details-title" className="text-xl font-bold">Transaction Details</h2>
+              <button onClick={() => setIsDetailModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800" aria-label="Close transaction details"><X className="w-5 h-5" /></button>
             </div>
             
             <div className="space-y-6">
@@ -671,6 +851,7 @@ const App: React.FC = () => {
                     setIsDetailModalOpen(false);
                   }}
                   className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 active:scale-[0.98] transition-all"
+                  aria-label="Edit transaction"
                 >
                   <Edit2 className="w-5 h-5" /> Edit
                 </button>
@@ -680,6 +861,7 @@ const App: React.FC = () => {
                     setIsDetailModalOpen(false);
                   }}
                   className="flex-1 py-4 bg-gray-100 dark:bg-slate-800 text-rose-500 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                  aria-label="Delete transaction"
                 >
                   <Trash2 className="w-5 h-5" /> Delete
                 </button>
@@ -692,20 +874,23 @@ const App: React.FC = () => {
       {/* Transaction Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm overflow-y-auto">
-          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`}>
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">{editingId ? 'Edit' : 'New Transaction'}</h2><button onClick={() => setIsModalOpen(false)}><X className="w-5 h-5" /></button></div>
+          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`} role="dialog" aria-modal="true" aria-labelledby="transaction-modal-title">
+            <div className="flex justify-between items-center mb-6"><h2 id="transaction-modal-title" className="text-xl font-bold">{editingId ? 'Edit' : 'New Transaction'}</h2><button onClick={() => setIsModalOpen(false)} aria-label="Close transaction form"><X className="w-5 h-5" /></button></div>
             <form onSubmit={handleAddTransaction} className="space-y-4">
-              <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-slate-800 rounded-xl"><button type="button" onClick={() => setType('expense')} className={`py-2 rounded-lg text-sm font-semibold ${type === 'expense' ? 'bg-white dark:bg-slate-700' : 'text-gray-500'}`}>Expense</button><button type="button" onClick={() => { setType('income'); setTransactionCategory('cat-income'); }} className={`py-2 rounded-lg text-sm font-semibold ${type === 'income' ? 'bg-white dark:bg-slate-700' : 'text-gray-500'}`}>Income</button></div>
+              <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-slate-800 rounded-xl" role="radiogroup" aria-label="Transaction type">
+                <button type="button" onClick={() => setType('expense')} className={`py-2 rounded-lg text-sm font-semibold ${type === 'expense' ? 'bg-white dark:bg-slate-700' : 'text-gray-500'}`} aria-checked={type === 'expense'} role="radio">Expense</button>
+                <button type="button" onClick={() => { setType('income'); setTransactionCategory('cat-income'); }} className={`py-2 rounded-lg text-sm font-semibold ${type === 'income' ? 'bg-white dark:bg-slate-700' : 'text-gray-500'}`} aria-checked={type === 'income'} role="radio">Income</button>
+              </div>
               
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Amount (₹)</label>
-                <input type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className={`w-full p-4 rounded-2xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required />
+                <label htmlFor="amount-input" className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Amount (₹)</label>
+                <input id="amount-input" type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className={`w-full p-4 rounded-2xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required aria-required="true" />
               </div>
 
               {type === 'expense' && (
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Category</label>
-                  <select value={transactionCategory} onChange={(e) => setTransactionCategory(e.target.value)} className={`w-full p-4 rounded-2xl border appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`}>
+                  <label htmlFor="category-select" className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Category</label>
+                  <select id="category-select" value={transactionCategory} onChange={(e) => setTransactionCategory(e.target.value)} className={`w-full p-4 rounded-2xl border appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} aria-label="Select transaction category">
                     {categories.filter(c => c.id !== 'cat-income').map(cat => (
                       <option key={cat.id} value={cat.id}>{cat.name}</option>
                     ))}
@@ -714,26 +899,26 @@ const App: React.FC = () => {
               )}
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Description</label>
-                <input type="text" placeholder="e.g. Lunch at Cafe" value={description} onChange={(e) => setDescription(e.target.value)} className={`w-full p-4 rounded-2xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} />
+                <label htmlFor="description-input" className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Description</label>
+                <input id="description-input" type="text" placeholder="e.g. Lunch at Cafe" value={description} onChange={(e) => setDescription(e.target.value)} className={`w-full p-4 rounded-2xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} aria-label="Transaction description" />
               </div>
 
               {/* Receipt Image Upload */}
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-400 ml-2 uppercase tracking-wider">Receipt Attachment</label>
-                <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+                <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" aria-label="Upload receipt image" />
                 {!receiptImage ? (
-                  <button type="button" onClick={() => fileInputRef.current?.click()} className={`w-full p-4 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:text-indigo-500 hover:border-indigo-500 transition-all ${isDarkMode ? 'border-slate-800 hover:bg-slate-800/50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                  <button type="button" onClick={() => fileInputRef.current?.click()} className={`w-full p-4 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:text-indigo-500 hover:border-indigo-500 transition-all ${isDarkMode ? 'border-slate-800 hover:bg-slate-800/50' : 'border-gray-200 hover:bg-gray-50'}`} aria-label="Attach Receipt Image">
                     <Camera className="w-6 h-6" />
                     <span className="text-xs font-medium">Attach Receipt Image</span>
                   </button>
                 ) : (
                   <div className="relative group">
                     <img src={receiptImage} alt="Receipt" className="w-full h-32 object-cover rounded-2xl shadow-sm border border-indigo-100 dark:border-slate-700" />
-                    <button type="button" onClick={() => setReceiptImage(undefined)} className="absolute top-2 right-2 p-1.5 bg-rose-500 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 sm:opacity-100 transition-opacity">
+                    <button type="button" onClick={() => setReceiptImage(undefined)} className="absolute top-2 right-2 p-1.5 bg-rose-500 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 sm:opacity-100 transition-opacity" aria-label="Remove receipt image">
                       <X className="w-4 h-4" />
                     </button>
-                    <button type="button" onClick={() => fileInputRef.current?.click()} className="absolute bottom-2 right-2 p-1.5 bg-indigo-600 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 sm:opacity-100 transition-opacity">
+                    <button type="button" onClick={() => fileInputRef.current?.click()} className="absolute bottom-2 right-2 p-1.5 bg-indigo-600 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 sm:opacity-100 transition-opacity" aria-label="Change receipt image">
                       <Edit2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -751,12 +936,12 @@ const App: React.FC = () => {
       {/* Save Confirmation Dialog */}
       {isSaveConfirmOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-          <div className={`w-full max-w-xs p-6 rounded-3xl text-center shadow-2xl scale-in ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+          <div className={`w-full max-w-xs p-6 rounded-3xl text-center shadow-2xl scale-in ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`} role="alertdialog" aria-modal="true" aria-labelledby="save-confirm-title" aria-describedby="save-confirm-description">
             <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircle2 className="w-8 h-8 text-indigo-600" />
             </div>
-            <h3 className="text-lg font-bold mb-2">Save Changes?</h3>
-            <p className="text-sm text-gray-500 mb-6">Are you sure you want to save these changes to your budget?</p>
+            <h3 id="save-confirm-title" className="text-lg font-bold mb-2">Save Changes?</h3>
+            <p id="save-confirm-description" className="text-sm text-gray-500 mb-6">Are you sure you want to save these changes to your budget?</p>
             <div className="flex flex-col gap-2">
               <button 
                 onClick={handleFinalizeSave} 
@@ -778,11 +963,11 @@ const App: React.FC = () => {
       {/* Goal Modal */}
       {isGoalModalOpen && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm">
-          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`}>
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">New Goal</h2><button onClick={() => setIsGoalModalOpen(false)}><X className="w-5 h-5" /></button></div>
+          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`} role="dialog" aria-modal="true" aria-labelledby="goal-modal-title">
+            <div className="flex justify-between items-center mb-6"><h2 id="goal-modal-title" className="text-xl font-bold">New Goal</h2><button onClick={() => setIsGoalModalOpen(false)} aria-label="Close new goal form"><X className="w-5 h-5" /></button></div>
             <form onSubmit={(e) => { e.preventDefault(); if (!goalTitle || !goalTarget) return; const newGoal: SavingsGoal = { id: crypto.randomUUID(), title: goalTitle, targetAmount: parseFloat(goalTarget), currentAmount: parseFloat(goalCurrent || '0'), color: GOAL_COLORS[savingsGoals.length % GOAL_COLORS.length] }; setSavingsGoals([...savingsGoals, newGoal]); setIsGoalModalOpen(false); }} className="space-y-4">
-              <input type="text" placeholder="Goal Title" value={goalTitle} onChange={(e) => setGoalTitle(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required />
-              <input type="number" placeholder="Target Amount" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required />
+              <input type="text" placeholder="Goal Title" value={goalTitle} onChange={(e) => setGoalTitle(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required aria-required="true" aria-label="Goal title" />
+              <input type="number" placeholder="Target Amount" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required aria-required="true" aria-label="Target amount" />
               <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold">Save Goal</button>
             </form>
           </div>
@@ -792,13 +977,13 @@ const App: React.FC = () => {
       {/* Category Modal */}
       {isCategoryModalOpen && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm">
-          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`}>
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">New Category</h2><button onClick={() => setIsCategoryModalOpen(false)}><X className="w-5 h-5" /></button></div>
+          <div className={`w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-12 sm:pb-6 transition-all ${isDarkMode ? 'bg-slate-900' : 'bg-white'}`} role="dialog" aria-modal="true" aria-labelledby="category-modal-title">
+            <div className="flex justify-between items-center mb-6"><h2 id="category-modal-title" className="text-xl font-bold">New Category</h2><button onClick={() => setIsCategoryModalOpen(false)} aria-label="Close new category form"><X className="w-5 h-5" /></button></div>
             <form onSubmit={(e) => { e.preventDefault(); if (!newCatName) return; const newCat: CategoryDefinition = { id: `cat-${crypto.randomUUID()}`, name: newCatName, iconName: newCatIcon }; setCategories([...categories, newCat]); setIsCategoryModalOpen(false); setNewCatName(''); }} className="space-y-4">
-              <input type="text" placeholder="Category Name" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required />
-              <div className="grid grid-cols-6 gap-2 p-2 bg-gray-50 dark:bg-slate-800 rounded-2xl max-h-48 overflow-y-auto">
+              <input type="text" placeholder="Category Name" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} className={`w-full p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-gray-50'}`} required aria-required="true" aria-label="Category name" />
+              <div className="grid grid-cols-6 gap-2 p-2 bg-gray-50 dark:bg-slate-800 rounded-2xl max-h-48 overflow-y-auto" role="radiogroup" aria-label="Select category icon">
                 {ICON_OPTIONS.map(icon => (
-                  <button key={icon} type="button" onClick={() => setNewCatIcon(icon)} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${newCatIcon === icon ? 'bg-indigo-600 text-white' : 'hover:bg-gray-200 dark:hover:bg-slate-700'}`}>
+                  <button key={icon} type="button" onClick={() => setNewCatIcon(icon)} className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${newCatIcon === icon ? 'bg-indigo-600 text-white' : 'hover:bg-gray-200 dark:hover:bg-slate-700'}`} aria-checked={newCatIcon === icon} role="radio" aria-label={`Select ${icon} icon`}>
                     {getIcon(icon)}
                   </button>
                 ))}
@@ -812,9 +997,9 @@ const App: React.FC = () => {
       {/* Delete Confirmation */}
       {(transactionToDelete || goalToDelete || categoryToDelete) && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-          <div className={`w-full max-w-xs p-6 rounded-3xl ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
-            <h3 className="text-lg font-bold text-center mb-2">Are you sure?</h3>
-            <p className="text-sm text-center text-gray-500 mb-6">This action cannot be undone.</p>
+          <div className={`w-full max-w-xs p-6 rounded-3xl ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`} role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title" aria-describedby="delete-confirm-description">
+            <h3 id="delete-confirm-title" className="text-lg font-bold text-center mb-2">Are you sure?</h3>
+            <p id="delete-confirm-description" className="text-sm text-center text-gray-500 mb-6">This action cannot be undone.</p>
             <div className="flex flex-col gap-2">
               <button onClick={() => { if (transactionToDelete) setTransactions(transactions.filter(t => t.id !== transactionToDelete)); if (goalToDelete) setSavingsGoals(savingsGoals.filter(g => g.id !== goalToDelete)); if (categoryToDelete) { setCategories(categories.filter(c => c.id !== categoryToDelete)); setTransactions(prev => prev.map(t => t.category === categoryToDelete ? { ...t, category: 'cat-other' } : t)); } setTransactionToDelete(null); setGoalToDelete(null); setCategoryToDelete(null); }} className="w-full py-3 bg-rose-600 text-white rounded-xl font-bold active:scale-[0.98] transition-all">Delete</button>
               <button onClick={() => { setTransactionToDelete(null); setGoalToDelete(null); setCategoryToDelete(null); }} className="w-full py-3 bg-gray-100 dark:bg-slate-800 rounded-xl font-semibold active:scale-[0.98] transition-all">Cancel</button>
