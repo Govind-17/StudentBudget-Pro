@@ -144,7 +144,7 @@ const App: React.FC = () => {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
-  const [isSaveConfirmOpen, setIsSaveConfirmOpen] = useState(false);
+  const [isSaveConfirmOpen, setIsSaveConfirmToOpen] = useState(false);
 
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<TransactionType>('expense');
@@ -367,7 +367,7 @@ const App: React.FC = () => {
   const handleAddTransaction = (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || parseFloat(amount) <= 0) return;
-    setIsSaveConfirmOpen(true);
+    setIsSaveConfirmToOpen(true);
   };
 
   const handleFinalizeSave = () => {
@@ -377,7 +377,7 @@ const App: React.FC = () => {
       const newTransaction: Transaction = { id: crypto.randomUUID(), amount: parseFloat(amount), type, category: transactionCategory, description: description || 'No description', date: new Date().toISOString(), receiptImage };
       setTransactions([newTransaction, ...transactions]);
     }
-    setIsSaveConfirmOpen(false);
+    setIsSaveConfirmToOpen(false);
     setIsModalOpen(false);
   };
 
@@ -543,7 +543,10 @@ const App: React.FC = () => {
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value, name) => [`₹${value.toFixed(0)}`, name]} />
+                    <Tooltip formatter={(value, name) => {
+                      const formattedValue = typeof value === 'number' ? `₹${value.toFixed(0)}` : String(value);
+                      return [formattedValue, name as string];
+                    }} />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -560,7 +563,10 @@ const App: React.FC = () => {
                     <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#334155' : '#e5e7eb'} />
                     <XAxis dataKey="month" tick={{ fill: isDarkMode ? '#cbd5e1' : '#64748b', fontSize: 10 }} />
                     <YAxis tickFormatter={(value) => `₹${value.toFixed(0)}`} tick={{ fill: isDarkMode ? '#cbd5e1' : '#64748b', fontSize: 10 }} />
-                    <Tooltip formatter={(value) => `₹${value.toFixed(0)}`} />
+                    <Tooltip formatter={(value) => {
+                      const formattedValue = typeof value === 'number' ? `₹${value.toFixed(0)}` : String(value);
+                      return formattedValue;
+                    }} />
                     <Bar dataKey="expenses" fill="#6366f1" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -950,7 +956,7 @@ const App: React.FC = () => {
                 Yes, Save
               </button>
               <button 
-                onClick={() => setIsSaveConfirmOpen(false)} 
+                onClick={() => setIsSaveConfirmToOpen(false)} 
                 className="w-full py-3 bg-gray-100 dark:bg-slate-800 rounded-xl font-semibold active:scale-[0.98] transition-all"
               >
                 Cancel
