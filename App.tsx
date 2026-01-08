@@ -628,6 +628,29 @@ const App: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Filter Summary Stats Display */}
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className={`p-4 rounded-2xl flex items-center gap-3 transition-all ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white shadow-sm'}`}>
+                <div className="w-9 h-9 bg-emerald-100 dark:bg-emerald-500/10 rounded-xl flex items-center justify-center">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total Income</p>
+                  <p className="font-bold text-emerald-600">₹{filteredStats.income.toFixed(0)}</p>
+                </div>
+              </div>
+              <div className={`p-4 rounded-2xl flex items-center gap-3 transition-all ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white shadow-sm'}`}>
+                <div className="w-9 h-9 bg-rose-100 dark:bg-rose-500/10 rounded-xl flex items-center justify-center">
+                  <TrendingDown className="w-4 h-4 text-rose-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total Expenses</p>
+                  <p className="font-bold text-rose-600">₹{filteredStats.expense.toFixed(0)}</p>
+                </div>
+              </div>
+            </div>
+
             {isFilterVisible && (
               <div className={`p-4 rounded-2xl border mb-4 space-y-4 scale-in ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-sm'}`}>
                 <div className="relative">
